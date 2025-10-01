@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Controle de Gastos Pessoais</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    :root{
+      --accent:#ff69b4;
+      --bg:#fff;
+      --muted:#f7f2f6;
+      --text:#222;
+      font-family: Inter, sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,var(--muted),#fff);color:var(--text)}
+    header{padding:16px;display:flex;justify-content:center;align-items:center;background:var(--accent);color:white;}
+    h1{margin:0;font-size:20px}
+    .app{max-width:900px;margin:20px auto;padding:16px}
+    .form{display:grid;grid-template-columns:1fr 1fr 120px;gap:10px;margin-bottom:20px}
+    input,select,button{padding:10px;border-radius:8px;border:1px solid #eee;font-size:14px}
+    button{background:var(--accent);color:white;border:0;cursor:pointer}
+    button:hover{opacity:0.9}
+    table{width:100%;border-collapse:collapse;margin-top:20px}
+    th,td{padding:10px;border-bottom:1px solid #eee;text-align:left}
+    th{background:var(--muted)}
+    .resumo{margin:20px 0;display:flex;justify-content:space-around;font-weight:700}
+    .chart-container{max-width:400px;height:250px;margin:0 auto;}
+    canvas{width:100% !important;height:100% !important;background:#fff;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.05);padding:10px;margin-top:20px}
+    #qrcode{margin-top:20px;display:flex;justify-content:center}
+    .center{text-align:center;margin-top:10px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Controle de Gastos Pessoais</h1>
+  </header>
+
+  <div class="app" id="app">
+    <form id="form" class="form">
+      <input id="desc" placeholder="Descrição" required>
+      <input id="valor" type="number" step="0.01" placeholder="Valor (R$)" required>
+      <select id="tipo">
+        <option value="despesa">Despesa</option>
+        <option value="receita">Receita</option>
+      </select>
+      <button type="submit">Adicionar</button>
+    </form>
+
+    <div class="resumo">
+      <div>Receitas: <span id="total-receita">R$ 0,00</span></div>
+      <div>Despesas: <span id="total-despesa">R$ 0,00</span></div>
+      <div>Saldo: <span id="saldo">R$ 0,00</span></div>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Descrição</th><th>Valor</th><th>Tipo</th><th>Ação</th></tr>
+      </thead>
+      <tbody id="lista"></tbody>
+    </table>
+
+    <h2>Gráfico de Gastos</h2>
+    <div class="chart-container"><canvas id="grafico"></canvas></div>
+    <h2>Evolução do Saldo</h2>
+    <div class="chart-container"><canvas id="graficoLinha"></canvas></div>
+
+    <div class="center">
+      <button id="gerar-qr">Gerar QR Code do meu controle</button>
+    </div>
+    <div id="qrcode"></div>
+  </div>
+
+  <script>
+    const form = document.getElementById('form');
+    const lista = document.getElementById('lista');
+    const totalReceita = document.getElementById('total-receita');
+    const totalDespesa = document.getElementById('total-despesa');
+    const saldoEl = document.getElementById('saldo');
+    const qrcodeDiv = document.getElementById('qrcode');
+
+    let transacoes = [];
+
+    const fmt = v => 'R$ ' + v.toFixed(2).replace('.',',');
+
+    function atualizar(){
+      lista.innerHTML = '';
+      let receitas=0, despesas=0;
+      transacoes.forEach((t,i)=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${t.desc}</td><td>${fmt(t.valor)}</td><td>${t.tipo}</td><td><button onclick="remover(${i})">X</button></td>`;
+        lista.appendChild(tr);
+        if(t.tipo==='receita') receitas+=t.valor; else despesas+=t.valor;
+      });
+      totalReceita.textContent = fmt(receitas);
+      totalDespesa.textContent = fmt(despesas);
+      saldoEl.textContent = fmt(receitas-despesas);
+      localStorage.setItem('gastos', JSON.stringify(transacoes));
+      atualizarGraficos(receitas, despesas);
+    }
+
+    form.addEventListener('submit', e=>{
+      e.preventDefault();
+      const desc = document.getElementById('desc').value;
+      const valor = parseFloat(document.getElementById('valor').value);
+      const tipo = document.getElementById('tipo').value;
+      if(!desc || isNaN(valor)) return;
+      transacoes.push({desc, valor, tipo, data:new Date().toISOString()});
+      form.reset();
+      atualizar();
+    });
+
+    function remover(i){
+      transacoes.splice(i,1);
+      atualizar();
+    }
+
+    let chart, chartLinha;
+    function atualizarGraficos(receitas, despesas){
+      const ctx = document.getElementById('grafico').getContext('2d');
+      if(chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type:'doughnut',
+        data:{
+          labels:['Receitas','Despesas'],
+          datasets:[{
+            data:[receitas, despesas],
+            backgroundColor:['#ffb6d9', '#ff69b4']
+          }]
+        },
+        options:{plugins:{legend:{position:'bottom'}},responsive:true,maintainAspectRatio:true}
+      });
+
+      const ctxLinha = document.getElementById('graficoLinha').getContext('2d');
+      if(chartLinha) chartLinha.destroy();
+      let saldo=0;
+      const labels = transacoes.map(t=> new Date(t.data).toLocaleDateString());
+      const dataSaldo = transacoes.map(t=>{
+        if(t.tipo==='receita') saldo+=t.valor; else saldo-=t.valor;
+        return saldo;
+      });
+      chartLinha = new Chart(ctxLinha, {
+        type:'line',
+        data:{labels, datasets:[{label:'Saldo', data:dataSaldo, fill:false, borderColor:'#ff69b4', tension:0.2}]},
+        options:{scales:{y:{beginAtZero:true}},responsive:true,maintainAspectRatio:true}
+      });
+    }
+
+    // QR Code logic
+    document.getElementById('gerar-qr').addEventListener('click', ()=>{
+      const dados = encodeURIComponent(JSON.stringify(transacoes));
+      const url = window.location.origin + window.location.pathname + '?data=' + dados;
+      qrcodeDiv.innerHTML = '';
+      new QRCode(qrcodeDiv, {text: url, width:200, height:200});
+    });
+
+    // Verificar se veio por link com ?data=
+    const params = new URLSearchParams(window.location.search);
+    if(params.has('data')){
+      try{
+        transacoes = JSON.parse(decodeURIComponent(params.get('data')));
+        document.getElementById('app').innerHTML = '<h2 style="text-align:center">Meu Gráfico de Gastos</h2><div class="chart-container"><canvas id="grafico"></canvas></div><div class="chart-container"><canvas id="graficoLinha"></canvas></div>';
+        let receitas=0, despesas=0;
+        transacoes.forEach(t=>{if(t.tipo==='receita') receitas+=t.valor; else despesas+=t.valor;});
+        atualizarGraficos(receitas, despesas);
+      }catch(err){alert('Dados inválidos no QR Code');}
+    }else{
+      transacoes = JSON.parse(localStorage.getItem('gastos')||'[]');
+      atualizar();
+    }
+  </script>
+</body>
+</html>
